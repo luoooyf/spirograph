@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title></title>
+  <style>
+    :root { color-scheme: light; }
+    html, body { margin: 0; height: 100%; background:#000000; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .ui {
+      position: fixed; left: 16px; bottom: 16px;
+      font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: rgba(255, 255, 255, 0.13);
+      padding: 12px 12px 10px 12px;
+      backdrop-filter: blur(6px);
+      max-width: 340px;
+      user-select: none;
+      color: #ffffff;   
+    }
+    .row label, .row span {color: rgba(255,255,255,0.85);}
+    .row { display:flex; align-items:center; gap:10px; margin: 6px 0; }
+    .row label { width: 110px; opacity: 0.8; }
+    .row input[type="range"] { width: 180px; }
+    .row input[type="checkbox"] { transform: translateY(1px); }
+    .hint { margin-top: 8px; opacity: 0.75; }
+    .btns { display:flex; gap:8px; margin-top:8px; }
+    button {
+      border: 1px solid rgba(0,0,0,0.16);
+      background: #fff; border-radius: 10px;
+      padding: 6px 10px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:active { transform: translateY(1px); }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div class="ui">
+
+    <div class="row">
+      <label>Grid</label>
+      <input id="grid" type="range" min="1" max="4" step="1" value="1">
+      <span id="gridVal">1x1</span>
+    </div>
+
+    <div class="row">
+      <label>Stroke</label>
+      <input id="stroke" type="range" min="0.5" max="3.5" step="0.1" value="0.5">
+      <span id="strokeVal">1.3</span>
+    </div>
+
+    <div class="row">
+      <label>Nodes</label>
+      <input id="nodes" type="range" min="0" max="120" step="1" value="48">
+      <span id="nodesVal">48</span>
+    </div>
+
+    <div class="row">
+      <label>Node size</label>
+      <input id="nodeSize" type="range" min="1" max="10" step="1" value="4">
+      <span id="nodeSizeVal">4</span>
+    </div>
+
+    <div class="row">
+      <label>Separation</label>
+      <input id="sep" type="range" min="0" max="1" step="0.01" value="0.35">
+      <span id="sepVal">0.35</span>
+    </div>
+    
+
+    <div class="row">
+      <label>Square nodes</label>
+      <input id="square" type="checkbox" checked>
+    </div>
+
+    <div class="row">
+      <label>Show spiro</label>
+      <input id="showSpiro" type="checkbox">
+    </div>
+
+    <div class="btns">
+      <button id="regen">Regenerate</button>
+      <button id="pause">Pause</button>
+      <button id="download">Download</button>
+    </div>
+
+    <div class="hint">
+      Keys: <b>R</b> regenerate · <b>G</b> toggle spiro · <b>Space</b> pause
+    </div>
+  </div>
+
+<script>
+const FG = "#ffffff";
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  W = Math.floor(window.innerWidth * DPR);
+  H = Math.floor(window.innerHeight * DPR);
+  canvas.width = W;
+  canvas.height = H;
+}
+window.addEventListener("resize", resize);
+resize();
+
+const ui = {
+  grid: document.getElementById("grid"),
+  gridVal: document.getElementById("gridVal"),
+  stroke: document.getElementById("stroke"),
+  strokeVal: document.getElementById("strokeVal"),
+  nodes: document.getElementById("nodes"),
+  nodesVal: document.getElementById("nodesVal"),
+  nodeSize: document.getElementById("nodeSize"),
+  nodeSizeVal: document.getElementById("nodeSizeVal"),
+  sep: document.getElementById("sep"),
+  sepVal: document.getElementById("sepVal"),
+  square: document.getElementById("square"),
+  showSpiro: document.getElementById("showSpiro"),
+  regen: document.getElementById("regen"),
+  pause: document.getElementById("pause"),
+  download: document.getElementById("download")
+};
+
+function syncUI() {
+  const g = parseInt(ui.grid.value, 10);
+  ui.gridVal.textContent = `${g}×${g}`;
+  ui.strokeVal.textContent = (+ui.stroke.value).toFixed(1);
+  ui.nodesVal.textContent = ui.nodes.value;
+  ui.nodeSizeVal.textContent = ui.nodeSize.value;
+  ui.sepVal.textContent = (+ui.sep.value).toFixed(2);
+}
+["input","change"].forEach(ev=>{
+  ui.grid.addEventListener(ev, syncUI);
+  ui.stroke.addEventListener(ev, syncUI);
+  ui.nodes.addEventListener(ev, syncUI);
+  ui.nodeSize.addEventListener(ev, syncUI);
+  ui.sep.addEventListener(ev, syncUI);
+  ui.square.addEventListener(ev, syncUI);
+  ui.showSpiro.addEventListener(ev, syncUI);
+});
+syncUI();
+
+
+const TAU = Math.PI * 2;
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp = (a,b,t)=>a+(b-a)*t;
+function smoothstep(t){ return t*t*(3-2*t); }
+function rand(a=0,b=1){ return a + Math.random()*(b-a); }
+function randi(a,b){ return Math.floor(rand(a,b+1)); }
+function spiroPoint(R, r, d, t) {
+  const k = (R - r) / r;
+  return {
+    x: (R - r) * Math.cos(t) + d * Math.cos(k * t),
+    y: (R - r) * Math.sin(t) - d * Math.sin(k * t),
+  };
+}
+
+function generateSpiroPath(params) {
+  const { R, r, d, samples } = params;
+
+  const g = gcdInt(Math.round(R-r), Math.round(r));
+  const loops = Math.max(1, Math.round(r / g));
+  const tMax = TAU * loops;
+
+  const pts = [];
+  for (let i=0; i<samples; i++){
+    const t = (i/(samples-1))*tMax;
+    pts.push(spiroPoint(R, r, d, t));
+  }
+  return pts;
+}
+function gcdInt(a,b){
+  a = Math.abs(a); b = Math.abs(b);
+  while (b) [a,b] = [b, a % b];
+  return a || 1;
+}
+
+function buildArcTable(pts) {
+  const L = [0];
+  let acc = 0;
+  for (let i=1;i<pts.length;i++){
+    const dx = pts[i].x-pts[i-1].x;
+    const dy = pts[i].y-pts[i-1].y;
+    acc += Math.hypot(dx,dy);
+    L.push(acc);
+  }
+  return { L, total: acc };
+}
+function sampleByArc(pts, arc, table){
+  // arc in [0,total)
+  const { L, total } = table;
+  const target = ((arc % total) + total) % total;
+  // binary search
+  let lo = 0, hi = L.length-1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (L[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  const i = clamp(lo,1,L.length-1);
+  const t = (target - L[i-1]) / Math.max(1e-6, (L[i]-L[i-1]));
+  const p0 = pts[i-1], p1 = pts[i];
+  return { x: lerp(p0.x,p1.x,t), y: lerp(p0.y,p1.y,t), i, t };
+}
+function tangentAt(pts, idx){
+  const i0 = clamp(idx-1,0,pts.length-1);
+  const i1 = clamp(idx+1,0,pts.length-1);
+  const dx = pts[i1].x - pts[i0].x;
+  const dy = pts[i1].y - pts[i0].y;
+  const m = Math.hypot(dx,dy) || 1;
+  return { x: dx/m, y: dy/m };
+}
+function normalFromTangent(t){ return { x: -t.y, y: t.x }; }
+
+let paused = false;
+let seed = 0;
+
+let spiro = null;       // full spiro path (pts + arc table)
+let conductor = null;   // conductor segment (pts + arc table)
+let nodes = [];         // node list
+let phase = 0;          // 0 draw conductor, 1 nodes active
+let phaseT = 0;         // 0..1 progression for conductor draw
+let lastTime = performance.now();
+
+function regenerate() {
+  seed++;
+  phase = 0;
+  phaseT = 0;
+  nodes = [];
+
+  const R = randi(140, 240);
+  const r = randi(40, 120);
+  const d = randi(60, 200);
+
+  const base = generateSpiroPath({ R, r, d, samples: 2600 });
+  const arc = buildArcTable(base);
+  spiro = { pts: base, arc };
+
+  const startIdx = randi(200, base.length - 800);
+  const segLen = randi(900, 1400);
+  const segPts = base.slice(startIdx, startIdx + segLen);
+  const segArc = buildArcTable(segPts);
+  conductor = { pts: segPts, arc: segArc };
+
+  const n = parseInt(ui.nodes.value, 10);
+  for (let i=0;i<n;i++){
+    const s = i / Math.max(1, n-1);
+    const arcPos = s * conductor.arc.total;
+    nodes.push({
+      arc: arcPos,
+      speed: rand(0.015, 0.05),
+      phase: rand(0, TAU),
+      offX: 0,
+      offY: 0,
+      orbitR: rand(0.5, 2.5),  
+      orbitW: rand(0.08, 0.18), 
+      drift: 0,
+      jitter: rand(0.0, 1.0),
+    });
+  }
+}
+ui.regen.addEventListener("click", regenerate);
+regenerate();
+
+function clear() {
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,W,H);
+}
+
+function drawPath(pts, x, y, scale, maxT=1, lineW=1.2, alpha=1) {
+  const count = Math.max(2, Math.floor(pts.length * clamp(maxT,0,1)));
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = lineW / scale;
+  ctx.lineCap = "butt";
+  ctx.lineJoin = "miter";
+  ctx.strokeStyle = FG;
+  ctx.beginPath();
+  for (let i=0;i<count;i++){
+    const p = pts[i];
+    if (i===0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawNode(px, py, size, square=true, alpha=1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = FG;
+  if (square) {
+    const s = size;
+    ctx.fillRect(px - s/2, py - s/2, s, s);
+  } else {
+    ctx.beginPath();
+    ctx.arc(px, py, size*0.5, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function fitPathToCell(pts, cellW, cellH, padding=22) {
+  let minX=1e9, minY=1e9, maxX=-1e9, maxY=-1e9;
+  for (const p of pts){
+    if (p.x<minX) minX=p.x;
+    if (p.y<minY) minY=p.y;
+    if (p.x>maxX) maxX=p.x;
+    if (p.y>maxY) maxY=p.y;
+  }
+  const bw = Math.max(1e-6, (maxX-minX));
+  const bh = Math.max(1e-6, (maxY-minY));
+  const sx = (cellW*DPR - padding*2*DPR) / bw;
+  const sy = (cellH*DPR - padding*2*DPR) / bh;
+  const scale = Math.min(sx, sy);
+
+  const cx = (minX+maxX)/2;
+  const cy = (minY+maxY)/2;
+  const x = (cellW*DPR)/2;
+  const y = (cellH*DPR)/2;
+  return { x, y, scale, cx, cy };
+}
+
+function drawCellFrame(x0,y0,w,h){
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1*DPR;
+  ctx.strokeRect(x0,y0,w,h);
+  ctx.restore();
+}
+
+ui.pause.addEventListener("click", ()=>{ paused = !paused; ui.pause.textContent = paused ? "Play" : "Pause"; });
+window.addEventListener("keydown", (e)=>{
+  if (e.key.toLowerCase() === "r") regenerate();
+  if (e.key.toLowerCase() === "g") ui.showSpiro.checked = !ui.showSpiro.checked;
+  if (e.key === " ") {
+    e.preventDefault();
+    paused = !paused;
+    ui.pause.textContent = paused ? "Play" : "Pause";
+  }
+});
+
+ui.download.addEventListener("click", () => {
+  const scale = 2; 
+  const off = document.createElement("canvas");
+  off.width = canvas.width * scale;
+  off.height = canvas.height * scale;
+  const octx = off.getContext("2d");
+  octx.scale(scale, scale);
+  octx.drawImage(canvas, 0, 0);
+
+  const link = document.createElement("a");
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  link.download = `spiro_${ts}_${scale}x.png`;
+  link.href = off.toDataURL("image/png", 1.0);
+  link.click();
+});
+
+
+function tick(now){
+  requestAnimationFrame(tick);
+  if (paused) { lastTime = now; return; }
+  const dt = clamp(now - lastTime, 0, 50);
+  lastTime = now;
+
+  clear();
+
+  const g = parseInt(ui.grid.value, 10);
+  const cellW = (W / DPR) / g;
+  const cellH = (H / DPR) / g;
+
+  const strokeW = parseFloat(ui.stroke.value);
+  const nSize = parseInt(ui.nodeSize.value, 10) * DPR;
+  const sepAmt = parseFloat(ui.sep.value);
+  const square = ui.square.checked;
+  const showSpiro = ui.showSpiro.checked;
+
+  if (phase === 0) {
+    phaseT += dt / 2200;
+    if (phaseT >= 1) { phaseT = 1; phase = 1; }
+  }
+
+  const nodesActiveT = clamp((phaseT - 0.35) / 0.65, 0, 1);
+
+  const tsec = now * 0.001;
+
+  for (let gy=0; gy<g; gy++){
+    for (let gx=0; gx<g; gx++){
+      const x0 = gx * cellW * DPR;
+      const y0 = gy * cellH * DPR;
+      const w = cellW * DPR;
+      const h = cellH * DPR;
+
+      drawCellFrame(x0, y0, w, h);
+
+      const fitCon = fitPathToCell(conductor.pts, cellW, cellH, 22);
+
+      const cellPhaseShift = (gx + gy*g) * 0.18;
+      const drawT = clamp(phaseT + cellPhaseShift*0.06, 0, 1);
+
+      if (showSpiro) {
+        const fitSpi = fitPathToCell(spiro.pts, cellW, cellH, 22);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0, y0, w, h);
+        ctx.clip();
+        ctx.translate(x0, y0);
+        drawPath(
+          spiro.pts.map(p=>({x:p.x-fitSpi.cx, y:p.y-fitSpi.cy})),
+          fitSpi.x, fitSpi.y, fitSpi.scale, 1,
+          strokeW*0.9, 0.12
+        );
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0, y0, w, h);
+      ctx.clip();
+      ctx.translate(x0, y0);
+
+      drawPath(
+        conductor.pts.map(p=>({x:p.x-fitCon.cx, y:p.y-fitCon.cy})),
+        fitCon.x, fitCon.y, fitCon.scale, drawT,
+        strokeW, 1
+      );
+
+      if (nodesActiveT > 0) {
+        const localSep = sepAmt * smoothstep(nodesActiveT);
+
+        const total = conductor.arc.total;
+        for (let i=0; i<nodes.length; i++){
+          const node = nodes[i];
+
+          const speedScale = (total / 18000); 
+          node.arc += dt * node.speed * speedScale;
+
+          const s = sampleByArc(conductor.pts, node.arc, conductor.arc);
+
+          const tan = tangentAt(conductor.pts, s.i);
+          const nrm = normalFromTangent(tan);
+
+          const orbit = node.orbitR * Math.sin(tsec * node.orbitW + node.phase);
+          const drift = 0;
+
+const rawX = (nrm.x * orbit + tan.x * drift) * localSep;
+const rawY = (nrm.y * orbit + tan.y * drift) * localSep;
+
+const follow = 1 - Math.pow(0.001, dt / 1000); 
+node.offX += (rawX - node.offX) * follow * 0.18;
+node.offY += (rawY - node.offY) * follow * 0.18;
+
+const maxOff = 1.2 * localSep;
+const ox = Math.max(-maxOff, Math.min(maxOff, node.offX));
+const oy = Math.max(-maxOff, Math.min(maxOff, node.offY));
+
+
+          const lx = (s.x - fitCon.cx + ox) * fitCon.scale + fitCon.x;
+          const ly = (s.y - fitCon.cy + oy) * fitCon.scale + fitCon.y;
+
+          const sz = (nSize * (0.55 + 0.9*(i/Math.max(1,nodes.length-1)))) * (0.35 + 0.65*randStable(i+seed));
+
+          drawNode(lx, ly, sz, square, 1);
+        }
+      }
+
+      ctx.restore();
+    }
+  }
+}
+
+function randStable(n){
+  const x = Math.sin(n * 999.123) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
