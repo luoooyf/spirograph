@@ -81,10 +81,17 @@
       <input id="showSpiro" type="checkbox">
     </div>
 
+    <div class="row">
+        <label>Theme</label>
+        <input id="theme" type="checkbox" checked>
+        <span>Dark</span>
+      </div>
+
     <div class="btns">
       <button id="regen">Regenerate</button>
       <button id="pause">Pause</button>
       <button id="download">Download</button>
+      <button id="record">Record 5s</button>
     </div>
 
     <div class="hint">
@@ -93,9 +100,45 @@
   </div>
 
 <script>
-const FG = "#ffffff";
+let FG = "#ffffff";
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
+const elRecord = document.getElementById("record");
+
+let mediaRecorder;
+let recordedChunks = [];
+
+elRecord.addEventListener("click", () => {
+  recordedChunks = [];
+
+  const stream = canvas.captureStream(60); 
+  mediaRecorder = new MediaRecorder(stream, {
+    mimeType: "video/webm; codecs=vp9"
+  });
+
+  mediaRecorder.ondataavailable = e => {
+    if (e.data.size > 0) recordedChunks.push(e.data);
+  };
+
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(recordedChunks, { type: "video/webm" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `spiro_motion_${Date.now()}.webm`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+  };
+
+  mediaRecorder.start();
+
+  setTimeout(() => {
+    mediaRecorder.stop();
+  }, 5000);
+});
+
 
 let W = 0, H = 0, DPR = 1;
 function resize() {
@@ -123,7 +166,8 @@ const ui = {
   showSpiro: document.getElementById("showSpiro"),
   regen: document.getElementById("regen"),
   pause: document.getElementById("pause"),
-  download: document.getElementById("download")
+  download: document.getElementById("download"),
+  theme: document.getElementById("theme")
 };
 
 function syncUI() {
@@ -134,6 +178,7 @@ function syncUI() {
   ui.nodeSizeVal.textContent = ui.nodeSize.value;
   ui.sepVal.textContent = (+ui.sep.value).toFixed(2);
 }
+
 ["input","change"].forEach(ev=>{
   ui.grid.addEventListener(ev, syncUI);
   ui.stroke.addEventListener(ev, syncUI);
@@ -145,6 +190,46 @@ function syncUI() {
 });
 syncUI();
 
+function applyTheme() {
+  const dark = ui.theme.checked;
+
+  document.documentElement.style.setProperty("color-scheme", dark ? "dark" : "light");
+  document.body.style.background = dark ? "#000000" : "#ffffff";
+
+  FG = dark ? "#ffffff" : "#000000";
+
+  const panel = document.querySelector(".ui");
+  if (panel) {
+    panel.style.background = dark ? "rgba(255,255,255,0.13)" : "rgba(0,0,0,0.06)";
+    panel.style.color = dark ? "#ffffff" : "#000000";
+    panel.style.border = dark ? "1px solid rgba(255,255,255,0.15)" : "1px solid rgba(0,0,0,0.12)";
+  }
+
+  document.querySelectorAll(".row label, .row span, .hint").forEach(el => {
+    el.style.color = dark ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.75)";
+  });
+
+  document.querySelectorAll("button").forEach(btn => {
+    btn.style.background = dark ? "#ffffff" : "#000000";
+    btn.style.color = dark ? "#000000" : "#ffffff";
+    btn.style.border = dark ? "1px solid rgba(0,0,0,0.16)" : "1px solid rgba(255,255,255,0.2)";
+  });
+
+  document.querySelectorAll('input[type="range"]').forEach(r => {
+    r.style.background = dark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.18)";
+  });
+
+  const themeText = ui.theme?.nextElementSibling;
+  if (themeText && themeText.tagName === "SPAN") {
+    themeText.textContent = dark ? "Dark" : "Light";
+  }
+}
+
+applyTheme();
+
+ui.theme.addEventListener("change", () => {
+  applyTheme();
+});
 
 const TAU = Math.PI * 2;
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
@@ -330,7 +415,7 @@ function fitPathToCell(pts, cellW, cellH, padding=22) {
 
 function drawCellFrame(x0,y0,w,h){
   ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.strokeStyle = ui.theme.checked ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)";
   ctx.lineWidth = 1*DPR;
   ctx.strokeRect(x0,y0,w,h);
   ctx.restore();
