@@ -49,7 +49,7 @@
     <div class="row">
       <label>Stroke</label>
       <input id="stroke" type="range" min="0.5" max="3.5" step="0.1" value="0.5">
-      <span id="strokeVal">1.3</span>
+      <span id="strokeVal">0.5</span>
     </div>
 
     <div class="row">
@@ -182,7 +182,8 @@ function syncUI() {
 ["input","change"].forEach(ev=>{
   ui.grid.addEventListener(ev, syncUI);
   ui.stroke.addEventListener(ev, syncUI);
-  ui.nodes.addEventListener(ev, syncUI);
+  ui.nodes.addEventListener("input", () => { syncUI(); syncNodesCount(); });
+  ui.nodes.addEventListener("change", () => { syncUI(); syncNodesCount(); });
   ui.nodeSize.addEventListener(ev, syncUI);
   ui.sep.addEventListener(ev, syncUI);
   ui.square.addEventListener(ev, syncUI);
@@ -351,6 +352,44 @@ function regenerate() {
 }
 ui.regen.addEventListener("click", regenerate);
 regenerate();
+
+function makeNode(i, n){
+  const s = (n <= 1) ? 0 : i / (n - 1);
+  return {
+    arc: s * conductor.arc.total,
+    speed: rand(0.015, 0.05),
+    phase: rand(0, TAU),
+    offX: 0,
+    offY: 0,
+    orbitR: rand(0.5, 2.5),
+    orbitW: rand(0.08, 0.18),
+    drift: 0,
+    jitter: rand(0.0, 1.0),
+  };
+}
+
+function syncNodesCount(){
+  const target = parseInt(ui.nodes.value, 10);
+
+  if (nodes.length > target) {
+    nodes.length = target;
+    return;
+  }
+
+  if (nodes.length < target) {
+    const start = nodes.length;
+    for (let i = start; i < target; i++){
+      nodes.push(makeNode(i, target));
+    }
+  }
+
+  const total = conductor.arc.total;
+  for (let i = 0; i < nodes.length; i++){
+    const s = (nodes.length <= 1) ? 0 : i / (nodes.length - 1);
+    nodes[i].arc = s * total;
+  }
+}
+
 
 function clear() {
   ctx.setTransform(1,0,0,1,0,0);
